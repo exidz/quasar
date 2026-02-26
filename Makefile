@@ -5,7 +5,7 @@ NIGHTLY_TOOLCHAIN := nightly
 SBF_EXAMPLES := examples/vault examples/escrow
 
 .PHONY: format format-fix clippy clippy-fix check-features \
-	build build-sbf test all-checks nightly-version
+	build build-sbf test bench-cu all-checks nightly-version
 
 # Print the nightly toolchain version for CI
 nightly-version:
@@ -38,6 +38,11 @@ build-sbf:
 test:
 	@$(MAKE) build
 	@cargo test -p quasar-core -p quasar-derive -p quasar-spl -p quasar-vault -p quasar-escrow --all-features
+
+bench-cu:
+	@$(MAKE) build-sbf
+	@echo "Running vault CU benchmark..."
+	@cargo test -p quasar-vault -- --nocapture 2>&1 | grep -E '(DEPOSIT|WITHDRAW) CU:'
 
 # Run all checks in sequence
 all-checks:
