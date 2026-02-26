@@ -3574,6 +3574,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "upstream-escrow"
+version = "0.1.0"
+dependencies = [
+ "mollusk-svm",
+ "mollusk-svm-programs-token",
+ "quasar-core",
+ "quasar-spl",
+ "solana-account",
+ "solana-address 2.2.0",
+ "solana-instruction",
+ "solana-program-pack",
+ "spl-token-interface",
+]
+
+[[package]]
 name = "utf8parse"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

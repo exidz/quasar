@@ -2,10 +2,11 @@ use super::{CpiCall, InstructionAccount};
 use crate::checks;
 use crate::traits::{AsAccountView, Program};
 use solana_account_view::AccountView;
-use solana_address::Address;
+use solana_address::{declare_id, Address};
 use solana_program_error::ProgramError;
 
-pub const SYSTEM_PROGRAM_ID: Address = Address::new_from_array([0u8; 32]);
+declare_id!("11111111111111111111111111111111");
+pub use ID as SYSTEM_PROGRAM_ID;
 
 // --- Free functions (used by derive macro init_signed + account realloc) ---
 
