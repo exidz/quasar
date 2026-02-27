@@ -10,40 +10,67 @@ pub fn generate_ts_client(idl: &Idl) -> String {
     let used = collect_used_codecs(idl);
     let has_dyn_string = used.contains("dynString");
     let has_dyn_vec = used.contains("dynVec");
+    let has_instructions = !idl.instructions.is_empty();
 
     // --- Imports ---
+    if has_instructions {
+        out.push_str("import { Buffer } from \"buffer\";\n");
+    }
     out.push_str(
         "import { PublicKey as Address, TransactionInstruction } from \"@solana/web3.js\";\n",
     );
 
     // Build codec imports list
     let mut codec_imports: Vec<&str> = vec!["getStructCodec"];
-    let numeric_codecs = [
-        "getU8Codec",
-        "getU16Codec",
-        "getU32Codec",
-        "getU64Codec",
-        "getU128Codec",
-        "getI8Codec",
-        "getI16Codec",
-        "getI32Codec",
-        "getI64Codec",
-        "getI128Codec",
+    let integer_codec_map = [
+        ("u8", "getU8Codec"),
+        ("u16", "getU16Codec"),
+        ("u32", "getU32Codec"),
+        ("u64", "getU64Codec"),
+        ("u128", "getU128Codec"),
+        ("i8", "getI8Codec"),
+        ("i16", "getI16Codec"),
+        ("i32", "getI32Codec"),
+        ("i64", "getI64Codec"),
+        ("i128", "getI128Codec"),
     ];
-    for c in &numeric_codecs {
-        let key = c.trim_start_matches("get").trim_end_matches("Codec");
-        if used.contains(key) {
-            codec_imports.push(c);
+    for (used_type, codec) in integer_codec_map {
+        if used.contains(used_type) {
+            codec_imports.push(codec);
         }
     }
     if used.contains("bool") {
         codec_imports.push("getBooleanCodec");
     }
 
+    if used.contains("publicKey") {
+        codec_imports.extend_from_slice(&["getBytesCodec", "fixCodecSize", "transformCodec"]);
+    }
+
+    if has_dyn_string {
+        codec_imports.extend_from_slice(&[
+            "addCodecSizePrefix",
+            "fixCodecSize",
+            "getU16Codec",
+            "getUtf8Codec",
+        ]);
+    }
+
+    if has_dyn_vec {
+        codec_imports.extend_from_slice(&["fixCodecSize", "getArrayCodec", "getU16Codec"]);
+    }
+
+    codec_imports.sort();
+    codec_imports.dedup();
+
     out.push_str(&format!(
         "import {{ {} }} from \"@solana/codecs\";\n",
         codec_imports.join(", ")
     ));
+    if has_dyn_vec {
+        out.push_str("import type { FixedSizeCodec } from \"@solana/codecs\";\n");
+    }
+
     out.push('\n');
 
     // --- PublicKey codec helper ---
@@ -359,7 +386,7 @@ pub fn generate_ts_client(idl: &Idl) -> String {
         let disc_bytes: Vec<String> = ix.discriminator.iter().map(|b| b.to_string()).collect();
         if ix.args.is_empty() {
             out.push_str(&format!(
-                "    const data = new Uint8Array([{}]);\n",
+                "    const data = Buffer.from([{}]);\n",
                 disc_bytes.join(", ")
             ));
         } else {
@@ -374,7 +401,7 @@ pub fn generate_ts_client(idl: &Idl) -> String {
             out.push_str("    ]);\n");
             let arg_names: Vec<&str> = ix.args.iter().map(|a| a.name.as_str()).collect();
             out.push_str(&format!(
-                "    const data = new Uint8Array([{}, ...argsCodec.encode({{ {} }})]);\n",
+                "    const data = Buffer.from([{}, ...argsCodec.encode({{ {} }})]);\n",
                 disc_bytes.join(", "),
                 arg_names.join(", ")
             ));
@@ -476,23 +503,9 @@ fn collect_used_codecs(idl: &Idl) -> HashSet<String> {
     let mut used = HashSet::new();
 
     let mut visit = |ty: &IdlType| match ty {
-        IdlType::Primitive(p) => match p.as_str() {
-            "bool" => {
-                used.insert("bool".to_string());
-            }
-            "publicKey" => {
-                used.insert("publicKey".to_string());
-            }
-            other => {
-                // e.g. "u8" -> "U8", "u64" -> "U64"
-                let key = format!(
-                    "{}{}",
-                    other.chars().next().unwrap().to_uppercase(),
-                    &other[1..]
-                );
-                used.insert(key);
-            }
-        },
+        IdlType::Primitive(p) => {
+            used.insert(p.clone());
+        }
         IdlType::Defined { .. } => {}
         IdlType::DynString { .. } => {
             used.insert("dynString".to_string());
@@ -552,72 +565,29 @@ fn format_disc_array(disc: &[u8]) -> String {
 }
 
 const PUBLIC_KEY_CODEC_HELPER: &str = r#"function getPublicKeyCodec() {
-  return {
-    encode(value: Address): Uint8Array {
-      return value.toBytes();
-    },
-    decode(bytes: Uint8Array, offset = 0): [Address, number] {
-      return [new Address(bytes.slice(offset, offset + 32)), offset + 32];
-    },
-    fixedSize: 32,
-  };
+  return transformCodec(
+    fixCodecSize(getBytesCodec(), 32),
+    (value: Address) => value.toBytes(),
+    bytes => new Address(bytes),
+  );
 }
 "#;
 
 const DYN_STRING_HELPER: &str = r#"function getDynStringCodec(maxLength: number) {
-  const fixedSize = 2 + maxLength;
-  return {
-    encode(value: string): Uint8Array {
-      const buf = new Uint8Array(fixedSize);
-      const view = new DataView(buf.buffer);
-      const encoded = new TextEncoder().encode(value);
-      view.setUint16(0, encoded.length, true);
-      buf.set(encoded, 2);
-      return buf;
-    },
-    decode(bytes: Uint8Array, offset = 0): [string, number] {
-      const view = new DataView(bytes.buffer, bytes.byteOffset + offset);
-      const len = view.getUint16(0, true);
-      const str = new TextDecoder().decode(
-        bytes.slice(offset + 2, offset + 2 + len),
-      );
-      return [str, offset + fixedSize];
-    },
-    fixedSize,
-  };
+  return fixCodecSize(
+    addCodecSizePrefix(getUtf8Codec(), getU16Codec()),
+      2 + maxLength,
+  );
 }
 "#;
 
-const DYN_VEC_HELPER: &str = r#"function getDynVecCodec<T>(
-  itemCodec: { encode(v: T): Uint8Array; decode(b: Uint8Array, o: number): [T, number]; fixedSize: number },
+const DYN_VEC_HELPER: &str = r#"function getDynVecCodec<TFrom, TTo extends TFrom = TFrom>(
+  itemCodec: FixedSizeCodec<TFrom, TTo>,
   maxLength: number,
 ) {
-  const fixedSize = 2 + maxLength * itemCodec.fixedSize;
-  return {
-    encode(value: T[]): Uint8Array {
-      const buf = new Uint8Array(fixedSize);
-      const view = new DataView(buf.buffer);
-      view.setUint16(0, value.length, true);
-      let offset = 2;
-      for (const item of value) {
-        buf.set(itemCodec.encode(item), offset);
-        offset += itemCodec.fixedSize;
-      }
-      return buf;
-    },
-    decode(bytes: Uint8Array, offset = 0): [T[], number] {
-      const view = new DataView(bytes.buffer, bytes.byteOffset + offset);
-      const len = view.getUint16(0, true);
-      const items: T[] = [];
-      let pos = offset + 2;
-      for (let i = 0; i < len; i++) {
-        const [item, next] = itemCodec.decode(bytes, pos);
-        items.push(item);
-        pos = next;
-      }
-      return [items, offset + fixedSize];
-    },
-    fixedSize,
-  };
+  return fixCodecSize(
+    getArrayCodec(itemCodec, { size: getU16Codec() }),
+    2 + maxLength * itemCodec.fixedSize,
+  );
 }
 "#;
