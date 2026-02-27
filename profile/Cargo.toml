@@ -14,3 +14,6 @@ object = { version = "0.36", default-features = false, features = ["read", "elf"
 memmap2 = "0.9"
 inferno = "0.12"
 rustc-demangle = "0.1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"

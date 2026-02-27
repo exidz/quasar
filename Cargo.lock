@@ -1925,6 +1925,9 @@ dependencies = [
  "memmap2",
  "object",
  "rustc-demangle",
+ "serde",
+ "serde_json",
+ "toml",
 ]
 
 [[package]]

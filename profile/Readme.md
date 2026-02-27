@@ -1,3 +1,8 @@
 # Command to run profiler
 CARGO_PROFILE_RELEASE_DEBUG=2 cargo build-sbf --manifest-path examples/escrow/Cargo.toml --lto && \
-cargo run --release -p quasar-profile -- target/sbpf-solana-solana/release/quasar_escrow.so -o profile.svg
+cargo run --release -p quasar-profile -- target/sbpf-solana-solana/release/quasar_escrow.so
+
+# Optional modes
+cargo run --release -p quasar-profile -- target/sbpf-solana-solana/release/quasar_escrow.so --svg -o profile.svg
+cargo run --release -p quasar-profile -- target/sbpf-solana-solana/release/quasar_escrow.so --folded
+cargo run --release -p quasar-profile -- target/sbpf-solana-solana/release/quasar_escrow.so --text

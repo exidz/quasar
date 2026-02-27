@@ -4,12 +4,16 @@ mod elf;
 mod output;
 mod walk;
 
-use std::path::PathBuf;
+use std::collections::HashSet;
+use std::fs;
+use std::path::{Path, PathBuf};
 
 use elf::DebugLevel;
 use memmap2::Mmap;
+use toml::Value;
 
 enum OutputMode {
+    Json,
     Svg,
     Folded,
     Text,
@@ -18,30 +22,43 @@ enum OutputMode {
 fn main() {
     let args: Vec<String> = std::env::args().collect();
 
+    if args.get(1).is_some_and(|a| a == "--help" || a == "-h") {
+        eprintln!(
+            "Usage: quasar-profile <path-to-elf.so> [-o output.json] [--json|--svg|--folded|--text]"
+        );
+        std::process::exit(0);
+    }
+
     if args.len() < 2 {
-        eprintln!("Usage: quasar-profile <path-to-elf.so> [-o output.svg] [--folded] [--text]");
+        eprintln!(
+            "Usage: quasar-profile <path-to-elf.so> [-o output.json] [--json|--svg|--folded|--text]"
+        );
         std::process::exit(1);
     }
 
     let elf_path = PathBuf::from(&args[1]);
-    let default_output = elf_path
-        .file_stem()
-        .and_then(|s| s.to_str())
-        .map(|name| format!("{}.profile.svg", name))
-        .unwrap_or_else(|| "profile.svg".to_string());
-    let mut output_path = PathBuf::from(default_output);
-    let mut mode = OutputMode::Svg;
+    let mut output_path: Option<PathBuf> = None;
+    let mut mode = OutputMode::Json;
 
     let mut i = 2;
     while i < args.len() {
         match args[i].as_str() {
             "-o" | "--output" => {
                 i += 1;
-                output_path =
-                    PathBuf::from(args.get(i).expect("-o requires an output path argument"));
+                output_path = Some(PathBuf::from(
+                    args.get(i).expect("-o requires an output path argument"),
+                ));
             }
+            "--json" => mode = OutputMode::Json,
+            "--svg" => mode = OutputMode::Svg,
             "--folded" => mode = OutputMode::Folded,
             "--text" => mode = OutputMode::Text,
+            "--help" | "-h" => {
+                eprintln!(
+                    "Usage: quasar-profile <path-to-elf.so> [-o output.json] [--json|--svg|--folded|--text]"
+                );
+                std::process::exit(0);
+            }
             other => {
                 eprintln!("Unknown option: {}", other);
                 std::process::exit(1);
@@ -98,12 +115,42 @@ fn main() {
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("unknown");
+    let version = resolve_program_version(&elf_path, program_name);
+    let binary_size = fs::metadata(&elf_path).map(|m| m.len()).unwrap_or(0);
+    let output_path = output_path.unwrap_or_else(|| {
+        let default = match mode {
+            OutputMode::Json => elf_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|name| format!("{}.profile.json", name))
+                .unwrap_or_else(|| "profile.json".to_string()),
+            OutputMode::Svg => elf_path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .map(|name| format!("{}.profile.svg", name))
+                .unwrap_or_else(|| "profile.svg".to_string()),
+            OutputMode::Folded => "profile.folded".to_string(),
+            OutputMode::Text => "profile.txt".to_string(),
+        };
+        PathBuf::from(default)
+    });
 
     let result = aggregate::profile(&mmap, &info, &resolver);
 
     output::print_summary(&result);
 
     match mode {
+        OutputMode::Json => {
+            output::write_json(
+                &result,
+                &output_path,
+                program_name,
+                &version,
+                binary_size,
+                "unknown", // TODO: When we decide what to put as the hash edit this
+            );
+            eprintln!("Profile JSON written to: {}", output_path.display());
+        }
         OutputMode::Svg => {
             output::write_svg(&result.folded_stacks, &output_path, program_name);
             eprintln!("Flame graph written to: {}", output_path.display());
@@ -115,4 +162,124 @@ fn main() {
             // Summary already printed above
         }
     }
+}
+
+fn resolve_program_version(elf_path: &std::path::Path, program_name: &str) -> String {
+    let workspace_root = find_workspace_root(elf_path).or_else(|| {
+        std::env::current_dir()
+            .ok()
+            .and_then(|cwd| find_workspace_root(&cwd))
+    });
+
+    let Some(workspace_root) = workspace_root else {
+        return "unknown".to_string();
+    };
+
+    let mut candidates = HashSet::new();
+    let stem = program_name.trim();
+    if !stem.is_empty() {
+        candidates.insert(stem.to_string());
+        candidates.insert(stem.replace('_', "-"));
+    }
+    if let Some(no_lib) = stem.strip_prefix("lib") {
+        candidates.insert(no_lib.to_string());
+        candidates.insert(no_lib.replace('_', "-"));
+    }
+
+    if let Some(version) = find_matching_package_version(&workspace_root, &candidates) {
+        return version;
+    }
+
+    read_workspace_version(&workspace_root).unwrap_or_else(|| "unknown".to_string())
+}
+
+fn find_workspace_root(start: &std::path::Path) -> Option<PathBuf> {
+    let mut cur = if start.is_dir() {
+        start.to_path_buf()
+    } else {
+        start.parent()?.to_path_buf()
+    };
+
+    loop {
+        let cargo = cur.join("Cargo.toml");
+        if cargo.exists() {
+            if let Ok(content) = fs::read_to_string(&cargo) {
+                if let Ok(value) = content.parse::<Value>() {
+                    if value.get("workspace").is_some() {
+                        return Some(cur);
+                    }
+                }
+            }
+        }
+        if !cur.pop() {
+            return None;
+        }
+    }
+}
+
+fn find_matching_package_version(
+    workspace_root: &Path,
+    candidates: &HashSet<String>,
+) -> Option<String> {
+    let mut stack = vec![workspace_root.to_path_buf()];
+
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = fs::read_dir(&dir) else {
+            continue;
+        };
+
+        for entry in entries {
+            let Ok(entry) = entry else {
+                continue;
+            };
+            let path = entry.path();
+
+            if path.is_dir() {
+                let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+                if name == "target" || name == ".git" {
+                    continue;
+                }
+                stack.push(path);
+                continue;
+            }
+
+            if path.file_name().and_then(|s| s.to_str()) != Some("Cargo.toml") {
+                continue;
+            }
+
+            let Ok(content) = fs::read_to_string(&path) else {
+                continue;
+            };
+            let Ok(value) = content.parse::<Value>() else {
+                continue;
+            };
+            let Some(package) = value.get("package").and_then(|v| v.as_table()) else {
+                continue;
+            };
+            let Some(name) = package.get("name").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            if !candidates.contains(name) {
+                continue;
+            }
+            let Some(version) = package.get("version").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            return Some(version.to_string());
+        }
+    }
+
+    None
+}
+
+fn read_workspace_version(workspace_root: &std::path::Path) -> Option<String> {
+    let cargo = workspace_root.join("Cargo.toml");
+    let content = fs::read_to_string(cargo).ok()?;
+    let value: Value = content.parse().ok()?;
+    value
+        .get("workspace")?
+        .get("package")?
+        .get("version")?
+        .as_str()
+        .map(ToString::to_string)
 }
