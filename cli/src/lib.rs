@@ -70,6 +70,18 @@ pub struct InitCommand {
     /// Skip git init
     #[arg(long, action = ArgAction::SetTrue)]
     pub no_git: bool,
+
+    /// Testing framework (none, mollusk, quasarsvm-rust, quasarsvm-web3js, quasarsvm-kit)
+    #[arg(long)]
+    pub framework: Option<String>,
+
+    /// Project template (minimal, full)
+    #[arg(long)]
+    pub template: Option<String>,
+
+    /// Toolchain (solana, upstream)
+    #[arg(long)]
+    pub toolchain: Option<String>,
 }
 
 #[derive(Args, Debug, Default)]
@@ -207,7 +219,7 @@ pub struct CompletionsCommand {
 
 pub fn run(cli: Cli) -> CliResult {
     match cli.command {
-        Command::Init(cmd) => init::run(cmd.name, cmd.yes, cmd.no_git),
+        Command::Init(cmd) => init::run(cmd.name, cmd.yes, cmd.no_git, cmd.framework, cmd.template, cmd.toolchain),
         Command::Build(cmd) => build::run(cmd.debug, cmd.watch, cmd.features),
         Command::Test(cmd) => test::run(cmd.debug, cmd.filter, cmd.watch, cmd.no_build),
         Command::Deploy(cmd) => deploy::run(cmd.program_keypair, cmd.upgrade_authority),

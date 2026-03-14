@@ -273,11 +273,22 @@ fn dim(s: &str) -> String {
 // Entry point
 // ---------------------------------------------------------------------------
 
-pub fn run(name: Option<String>, yes: bool, no_git: bool) -> CliResult {
+pub fn run(
+    name: Option<String>,
+    yes: bool,
+    no_git: bool,
+    framework_override: Option<String>,
+    template_override: Option<String>,
+    toolchain_override: Option<String>,
+) -> CliResult {
     let globals = GlobalConfig::load();
 
-    // Skip prompts when a name is provided (or --yes is set)
-    let skip_prompts = yes || name.is_some();
+    // Skip prompts when a name is provided (or --yes is set), or when explicit flags given
+    let skip_prompts = yes
+        || name.is_some()
+        || framework_override.is_some()
+        || template_override.is_some()
+        || toolchain_override.is_some();
 
     if globals.ui.animation {
         print_banner();
@@ -310,7 +321,7 @@ pub fn run(name: Option<String>, yes: bool, no_git: bool) -> CliResult {
     };
 
     // Toolchain
-    let toolchain_default = match globals.defaults.toolchain.as_deref() {
+    let toolchain_default = match toolchain_override.as_deref().or(globals.defaults.toolchain.as_deref()) {
         Some("upstream") => 1,
         _ => 0,
     };
@@ -350,7 +361,7 @@ pub fn run(name: Option<String>, yes: bool, no_git: bool) -> CliResult {
     }
 
     // Testing framework
-    let framework_default = match globals.defaults.framework.as_deref() {
+    let framework_default = match framework_override.as_deref().or(globals.defaults.framework.as_deref()) {
         Some("mollusk") => 1,
         Some("quasarsvm-rust") => 2,
         Some("quasarsvm-web3js") => 3,
@@ -384,7 +395,7 @@ pub fn run(name: Option<String>, yes: bool, no_git: bool) -> CliResult {
     };
 
     // Template
-    let template_default = match globals.defaults.template.as_deref() {
+    let template_default = match template_override.as_deref().or(globals.defaults.template.as_deref()) {
         Some("full") => 1,
         _ => 0,
     };
@@ -848,7 +859,7 @@ describe("{class_name} Program", async () => {{
 
     const result = vm.processInstruction(initializeInstruction, accounts);
 
-    assert.isTrue(result.status.ok, `initialize failed:\\n${{result.logs.join("\\n")}}`);
+    assert.isTrue(result.status.ok, `initialize failed:\n${{result.logs.join("\n")}}`);
   }});
 
   run()
@@ -893,7 +904,7 @@ describe("{class_name} Program", async () => {{
 
     const result = vm.processInstruction(initializeInstruction, accounts);
 
-    assert.isTrue(result.status.ok, `initialize failed:\\n${{result.logs.join("\\n")}}`);
+    assert.isTrue(result.status.ok, `initialize failed:\n${{result.logs.join("\n")}}`);
   }});
 
   run();
@@ -1009,7 +1020,7 @@ fn test_initialize() {{
 
     match result.status() {{
         ExecutionStatus::Success => {{}},
-        ExecutionStatus::Err(e) => panic!("initialize failed: {{e}}\\n{{:?}}", result.logs),
+        ExecutionStatus::Err(e) => panic!("initialize failed: {{e}}\n{{:?}}", result.logs),
     }}
 }}
 "#
