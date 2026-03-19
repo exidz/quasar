@@ -220,9 +220,7 @@ fn print_banner() {
                         9 if ci >= tag_off && ci - tag_off < tag_chars.len() => {
                             tag_chars[ci - tag_off]
                         }
-                        10 if ci >= by_off && ci - by_off < by_chars.len() => {
-                            by_chars[ci - by_off]
-                        }
+                        10 if ci >= by_off && ci - by_off < by_chars.len() => by_chars[ci - by_off],
                         _ => ' ',
                     };
 
