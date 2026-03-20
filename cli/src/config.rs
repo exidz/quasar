@@ -119,9 +119,6 @@ pub struct UiConfig {
     /// Use colored output (default: true)
     #[serde(default = "default_true")]
     pub color: bool,
-    /// Show build timing info (default: true)
-    #[serde(default = "default_true")]
-    pub timing: bool,
 }
 
 fn default_true() -> bool {
@@ -133,7 +130,6 @@ impl Default for UiConfig {
         Self {
             animation: true,
             color: true,
-            timing: true,
         }
     }
 }

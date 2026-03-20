@@ -1,5 +1,5 @@
 use {
-    crate::{error::CliResult, style},
+    crate::{error::CliResult, style, utils},
     std::{fs, path::Path},
 };
 
@@ -26,12 +26,36 @@ pub fn run_instruction(name: &str) -> CliResult {
     let instructions_dir = Path::new("src").join("instructions");
     let lib_path = Path::new("src").join("lib.rs");
 
-    if !instructions_dir.exists() {
+    if !lib_path.exists() {
         eprintln!(
             "  {}",
-            style::fail("src/instructions/ not found — are you in a Quasar project?")
+            style::fail("src/lib.rs not found — are you in a Quasar project?")
         );
         std::process::exit(1);
+    }
+
+    // Create instructions directory if it doesn't exist (minimal template)
+    if !instructions_dir.exists() {
+        fs::create_dir_all(&instructions_dir).map_err(anyhow::Error::from)?;
+
+        // Wire up `mod instructions;` and `use instructions::*;` in lib.rs
+        let lib_content = fs::read_to_string(&lib_path).map_err(anyhow::Error::from)?;
+        if !lib_content.contains("mod instructions;") {
+            // Insert after the last `use` or `mod` line at the top
+            let insert = "mod instructions;\nuse instructions::*;\n";
+            let updated = if let Some(pos) = lib_content.find("#[program]") {
+                let mut result = String::with_capacity(lib_content.len() + insert.len());
+                result.push_str(&lib_content[..pos]);
+                result.push_str(insert);
+                result.push('\n');
+                result.push_str(&lib_content[pos..]);
+                result
+            } else {
+                format!("{insert}\n{lib_content}")
+            };
+            fs::write(&lib_path, updated).map_err(anyhow::Error::from)?;
+            println!("  {} src/instructions/", style::success("created"));
+        }
     }
 
     let file_path = instructions_dir.join(format!("{snake}.rs"));
@@ -44,7 +68,7 @@ pub fn run_instruction(name: &str) -> CliResult {
     }
 
     // Write the instruction file
-    let pascal = snake_to_pascal(&snake);
+    let pascal = utils::snake_to_pascal(&snake);
     let content = format!(
         r#"use quasar_lang::prelude::*;
 
@@ -185,7 +209,7 @@ pub fn run_state(name: &str) -> CliResult {
         std::process::exit(1);
     }
 
-    let pascal = snake_to_pascal(&snake);
+    let pascal = utils::snake_to_pascal(&snake);
     let state_path = Path::new("src").join("state.rs");
     let already_exists = state_path.exists();
 
@@ -256,7 +280,7 @@ pub fn run_error(name: &str) -> CliResult {
         std::process::exit(1);
     }
 
-    let pascal = snake_to_pascal(&snake);
+    let pascal = utils::snake_to_pascal(&snake);
     let errors_path = Path::new("src").join("errors.rs");
     let already_exists = errors_path.exists();
 
@@ -291,14 +315,3 @@ pub enum {pascal} {{
     Ok(())
 }
 
-fn snake_to_pascal(s: &str) -> String {
-    s.split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-            }
-        })
-        .collect()
-}

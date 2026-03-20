@@ -1,5 +1,5 @@
 use {
-    crate::{config::QuasarConfig, error::CliResult, style},
+    crate::{config::QuasarConfig, error::CliResult, style, utils},
     std::{
         path::PathBuf,
         process::{Command, Stdio},
@@ -114,35 +114,22 @@ pub fn run(elf_path: Option<PathBuf>, function: Option<String>, source: bool) ->
     }
 }
 
-/// Find the .so in target/deploy/ or target/profile/
 fn find_so() -> Result<PathBuf, crate::error::CliError> {
     let config = QuasarConfig::load()?;
-    let module = config.module_name();
-    let name = &config.project.name;
-
-    let candidates = [
-        format!("target/deploy/{name}.so"),
-        format!("target/deploy/{module}.so"),
-        format!("target/deploy/lib{module}.so"),
-        format!("target/profile/{module}.so"),
-    ];
-
-    for c in &candidates {
-        let p = PathBuf::from(c);
-        if p.exists() {
-            return Ok(p);
+    match utils::find_so(&config, true) {
+        Some(p) => Ok(p),
+        None => {
+            eprintln!(
+                "  {}",
+                style::fail("no .so found in target/deploy/ or target/profile/")
+            );
+            eprintln!(
+                "  {}",
+                style::dim("Run `quasar build` first or pass a path: `quasar dump <path>`")
+            );
+            std::process::exit(1);
         }
     }
-
-    eprintln!(
-        "  {}",
-        style::fail("no .so found in target/deploy/ or target/profile/")
-    );
-    eprintln!(
-        "  {}",
-        style::dim("Run `quasar build` first or pass a path: `quasar dump <path>`")
-    );
-    std::process::exit(1);
 }
 
 /// Find llvm-objdump in Solana platform-tools (newest version first)

@@ -1,5 +1,5 @@
 use {
-    crate::{config::QuasarConfig, error::CliResult, style, toolchain},
+    crate::{config::QuasarConfig, error::CliResult, style, toolchain, utils},
     std::{
         fs,
         path::{Path, PathBuf},
@@ -7,8 +7,6 @@ use {
         time::Instant,
     },
 };
-
-extern crate toml;
 
 pub fn run(debug: bool, watch: bool, features: Option<String>) -> CliResult {
     if watch {
@@ -96,7 +94,7 @@ fn run_once(debug: bool, features: Option<&str>) -> CliResult {
                 }
             }
 
-            let so_path = find_so(&config);
+            let so_path = utils::find_so(&config, false);
             let size_info = so_path
                 .and_then(|p| {
                     let meta = fs::metadata(&p).ok()?;
@@ -195,7 +193,7 @@ pub fn profile_build() -> Result<PathBuf, crate::error::CliError> {
             let src = if config.is_solana_toolchain() {
                 // build-sbf --debug puts it in target/deploy/ or
                 // target/sbf-solana-solana/release/
-                find_so(&config).unwrap_or_else(|| {
+                utils::find_so(&config, false).unwrap_or_else(|| {
                     PathBuf::from("target")
                         .join("sbf-solana-solana")
                         .join("release")
@@ -243,19 +241,6 @@ pub fn profile_build() -> Result<PathBuf, crate::error::CliError> {
             std::process::exit(1);
         }
     }
-}
-
-fn find_so(config: &QuasarConfig) -> Option<PathBuf> {
-    let module = config.module_name();
-    let name = &config.project.name;
-    [
-        format!("target/deploy/{name}.so"),
-        format!("target/deploy/{module}.so"),
-        format!("target/deploy/lib{module}.so"),
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .find(|p| p.exists())
 }
 
 fn run_watch(debug: bool, features: Option<String>) -> CliResult {

@@ -16,6 +16,7 @@ pub mod new;
 pub mod style;
 pub mod test;
 pub mod toolchain;
+pub mod utils;
 pub use error::CliResult;
 
 #[derive(Parser, Debug)]
@@ -135,6 +136,10 @@ pub struct TestCommand {
     /// Skip the build step (use existing binary)
     #[arg(long, action = ArgAction::SetTrue)]
     pub no_build: bool,
+
+    /// Cargo features to enable (comma-separated or repeated)
+    #[arg(long, value_name = "FEATURES")]
+    pub features: Option<String>,
 }
 
 #[derive(Args, Debug, Default)]
@@ -146,10 +151,26 @@ pub struct DeployCommand {
     /// Upgrade authority keypair (default: Solana CLI default keypair)
     #[arg(long, value_name = "KEYPAIR")]
     pub upgrade_authority: Option<PathBuf>,
+
+    /// Payer keypair (default: Solana CLI default keypair)
+    #[arg(long, short, value_name = "KEYPAIR")]
+    pub keypair: Option<PathBuf>,
+
+    /// Cluster URL (default: Solana CLI configured cluster)
+    #[arg(long, short, value_name = "URL")]
+    pub url: Option<String>,
+
+    /// Skip the build step
+    #[arg(long, action = ArgAction::SetTrue)]
+    pub skip_build: bool,
 }
 
 #[derive(Args, Debug, Default)]
-pub struct CleanCommand {}
+pub struct CleanCommand {
+    /// Also run cargo clean (removes all build artifacts)
+    #[arg(long, short, action = ArgAction::SetTrue)]
+    pub all: bool,
+}
 
 #[derive(Args, Debug)]
 pub struct ConfigCommand {
@@ -266,9 +287,15 @@ pub fn run(cli: Cli) -> CliResult {
             Ok(())
         }
         Command::Build(cmd) => build::run(cmd.debug, cmd.watch, cmd.features),
-        Command::Test(cmd) => test::run(cmd.debug, cmd.filter, cmd.watch, cmd.no_build),
-        Command::Deploy(cmd) => deploy::run(cmd.program_keypair, cmd.upgrade_authority),
-        Command::Clean(_) => clean::run(),
+        Command::Test(cmd) => test::run(cmd.debug, cmd.filter, cmd.watch, cmd.no_build, cmd.features),
+        Command::Deploy(cmd) => deploy::run(
+            cmd.program_keypair,
+            cmd.upgrade_authority,
+            cmd.keypair,
+            cmd.url,
+            cmd.skip_build,
+        ),
+        Command::Clean(cmd) => clean::run(cmd.all),
         Command::Config(cmd) => cfg::run(cmd.action),
         Command::Idl(cmd) => idl::run(cmd),
         Command::Dump(cmd) => dump::run(cmd.elf_path, cmd.function, cmd.source),
@@ -330,23 +357,29 @@ pub fn print_help() {
     );
     println!();
     println!("  {}", style::bold("Commands:"));
-    print_cmd("init   [name] [-y] [--no-git]", "Scaffold a new project");
     print_cmd(
-        "add    [-i name] [-s name] [-e name]",
+        "init    [name] [-y] [--no-git] [--template]",
+        "Scaffold a new project",
+    );
+    print_cmd(
+        "add     [-i name] [-s name] [-e name]",
         "Add instructions, state, errors",
     );
     print_cmd(
-        "build  [--debug] [--watch] [--features]",
+        "build   [--debug] [-w] [--features]",
         "Compile the on-chain program",
     );
     print_cmd(
-        "test   [--debug] [-f] [-w] [--no-build]",
+        "test    [--debug] [-f] [-w] [--features]",
         "Run the test suite",
     );
-    print_cmd("deploy [--program-keypair]", "Deploy to a cluster");
-    print_cmd("clean", "Remove build artifacts");
-    print_cmd("config [get|set|list|reset]", "Manage global settings");
-    print_cmd("idl    <path>", "Generate the program IDL");
+    print_cmd(
+        "deploy  [-u url] [-k keypair] [--skip-build]",
+        "Deploy to a cluster",
+    );
+    print_cmd("clean   [-a]", "Remove build artifacts");
+    print_cmd("config  [get|set|list|reset]", "Manage global settings");
+    print_cmd("idl     <path>", "Generate the program IDL");
     print_cmd(
         "profile [elf] [--expand] [--diff] [-w]",
         "Measure compute-unit usage",

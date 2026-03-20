@@ -1,17 +1,28 @@
 use {
-    crate::{config::QuasarConfig, error::CliResult, style},
+    crate::{config::QuasarConfig, error::CliResult, style, utils},
     std::{
         path::PathBuf,
         process::{Command, Stdio},
     },
 };
 
-pub fn run(program_keypair: Option<PathBuf>, upgrade_authority: Option<PathBuf>) -> CliResult {
+pub fn run(
+    program_keypair: Option<PathBuf>,
+    upgrade_authority: Option<PathBuf>,
+    keypair: Option<PathBuf>,
+    url: Option<String>,
+    skip_build: bool,
+) -> CliResult {
     let config = QuasarConfig::load()?;
     let name = &config.project.name;
 
+    // Build unless skipped
+    if !skip_build {
+        crate::build::run(false, false, None)?;
+    }
+
     // Find the .so binary
-    let so_path = find_so(&config).unwrap_or_else(|| {
+    let so_path = utils::find_so(&config, false).unwrap_or_else(|| {
         eprintln!(
             "\n  {}",
             style::fail(&format!("no compiled binary found for \"{name}\""))
@@ -76,6 +87,14 @@ pub fn run(program_keypair: Option<PathBuf>, upgrade_authority: Option<PathBuf>)
         ]);
     }
 
+    if let Some(payer) = &keypair {
+        cmd.args(["--keypair", payer.to_str().unwrap_or_default()]);
+    }
+
+    if let Some(cluster) = &url {
+        cmd.args(["--url", cluster]);
+    }
+
     let output = cmd.stdout(Stdio::piped()).stderr(Stdio::piped()).output();
 
     sp.finish_and_clear();
@@ -133,15 +152,3 @@ pub fn run(program_keypair: Option<PathBuf>, upgrade_authority: Option<PathBuf>)
     }
 }
 
-fn find_so(config: &QuasarConfig) -> Option<PathBuf> {
-    let module = config.module_name();
-    let name = &config.project.name;
-    [
-        format!("target/deploy/{name}.so"),
-        format!("target/deploy/{module}.so"),
-        format!("target/deploy/lib{module}.so"),
-    ]
-    .into_iter()
-    .map(PathBuf::from)
-    .find(|p| p.exists())
-}

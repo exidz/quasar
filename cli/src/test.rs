@@ -6,18 +6,24 @@ use {
     },
 };
 
-pub fn run(debug: bool, filter: Option<String>, watch: bool, no_build: bool) -> CliResult {
+pub fn run(
+    debug: bool,
+    filter: Option<String>,
+    watch: bool,
+    no_build: bool,
+    features: Option<String>,
+) -> CliResult {
     if watch {
-        return run_watch(debug, filter, no_build);
+        return run_watch(debug, filter, no_build, features);
     }
-    run_once(debug, filter.as_deref(), no_build)
+    run_once(debug, filter.as_deref(), no_build, features.as_deref())
 }
 
-fn run_once(debug: bool, filter: Option<&str>, no_build: bool) -> CliResult {
+fn run_once(debug: bool, filter: Option<&str>, no_build: bool, features: Option<&str>) -> CliResult {
     let config = QuasarConfig::load()?;
 
     if !no_build {
-        crate::build::run(debug, false, None)?;
+        crate::build::run(debug, false, features.map(String::from))?;
     }
 
     let sp = style::spinner("Testing...");
@@ -81,8 +87,8 @@ fn run_once(debug: bool, filter: Option<&str>, no_build: bool) -> CliResult {
     }
 }
 
-fn run_watch(debug: bool, filter: Option<String>, no_build: bool) -> CliResult {
-    if let Err(e) = run_once(debug, filter.as_deref(), no_build) {
+fn run_watch(debug: bool, filter: Option<String>, no_build: bool, features: Option<String>) -> CliResult {
+    if let Err(e) = run_once(debug, filter.as_deref(), no_build, features.as_deref()) {
         eprintln!("  {}", style::fail(&format!("{e}")));
     }
 
@@ -92,7 +98,7 @@ fn run_watch(debug: bool, filter: Option<String>, no_build: bool) -> CliResult {
             std::thread::sleep(std::time::Duration::from_secs(1));
             let current = crate::build::collect_mtimes(std::path::Path::new("src"));
             if current != baseline {
-                if let Err(e) = run_once(debug, filter.as_deref(), no_build) {
+                if let Err(e) = run_once(debug, filter.as_deref(), no_build, features.as_deref()) {
                     eprintln!("  {}", style::fail(&format!("{e}")));
                 }
                 break;

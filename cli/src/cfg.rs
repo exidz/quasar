@@ -55,7 +55,7 @@ fn unknown_key(key: &str) -> ! {
     eprintln!();
     eprintln!("  Available keys:");
     eprintln!("    defaults.toolchain, defaults.framework, defaults.template");
-    eprintln!("    ui.animation, ui.color, ui.timing");
+    eprintln!("    ui.animation, ui.color");
     std::process::exit(1);
 }
 
@@ -80,7 +80,6 @@ fn print_all(config: &GlobalConfig) {
     println!("  [ui]");
     println!("    animation  = {}", config.ui.animation);
     println!("    color      = {}", config.ui.color);
-    println!("    timing     = {}", config.ui.timing);
 }
 
 // ---------------------------------------------------------------------------
@@ -128,11 +127,6 @@ const ITEMS: &[ConfigItem] = &[
     ConfigItem {
         key: "ui.color",
         label: "Colored output",
-        kind: ConfigKind::Bool,
-    },
-    ConfigItem {
-        key: "ui.timing",
-        label: "Show build timing",
         kind: ConfigKind::Bool,
     },
 ];
@@ -265,7 +259,6 @@ fn get_value(config: &GlobalConfig, key: &str) -> Option<String> {
         ),
         "ui.animation" => Some(config.ui.animation.to_string()),
         "ui.color" => Some(config.ui.color.to_string()),
-        "ui.timing" => Some(config.ui.timing.to_string()),
         _ => None,
     }
 }
@@ -277,7 +270,6 @@ fn set_value(config: &mut GlobalConfig, key: &str, value: &str) -> bool {
         "defaults.template" => config.defaults.template = some_or_none(value),
         "ui.animation" => config.ui.animation = parse_bool(value),
         "ui.color" => config.ui.color = parse_bool(value),
-        "ui.timing" => config.ui.timing = parse_bool(value),
         _ => return false,
     }
     true
@@ -316,7 +308,7 @@ fn validate_value(key: &str, value: &str) -> Result<(), &'static str> {
                 Err("minimal, full")
             }
         }
-        "ui.animation" | "ui.color" | "ui.timing" => {
+        "ui.animation" | "ui.color" => {
             if matches!(
                 value,
                 "true" | "false" | "1" | "0" | "yes" | "no" | "on" | "off"

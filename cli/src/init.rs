@@ -404,7 +404,8 @@ pub fn run(
     // Project name
     let name: String = if skip_prompts {
         name.unwrap_or_else(|| {
-            eprintln!("  {}", crate::style::fail("--yes requires a project name"));
+            eprintln!("  {}", crate::style::fail("a project name is required when using flags"));
+            eprintln!("  {}", crate::style::dim("usage: quasar init <name> [--framework ...] [--template ...]"));
             std::process::exit(1);
         })
     } else {
@@ -935,7 +936,7 @@ fn generate_package_json(name: &str, framework: Framework) -> String {
 
 fn generate_test_ts(name: &str, framework: Framework, toolchain: Toolchain) -> String {
     let module_name = name.replace('-', "_");
-    let class_name = snake_to_pascal(&module_name);
+    let class_name = crate::utils::snake_to_pascal(&module_name);
     let so_name = match toolchain {
         Toolchain::Upstream => format!("lib{module_name}"),
         Toolchain::Solana => module_name.clone(),
@@ -1009,18 +1010,6 @@ describe("{class_name} Program", async () => {{
 "#
         )
     }
-}
-
-fn snake_to_pascal(s: &str) -> String {
-    s.split('_')
-        .map(|word| {
-            let mut chars = word.chars();
-            match chars.next() {
-                None => String::new(),
-                Some(c) => c.to_uppercase().to_string() + &chars.collect::<String>(),
-            }
-        })
-        .collect()
 }
 
 fn generate_tests_rs(
