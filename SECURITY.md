@@ -4,17 +4,9 @@
 
 ## Reporting a Vulnerability
 
-If you discover a security vulnerability, **report it privately** — do not open a public issue.
+Since Quasar is unaudited and should not be used with real funds, **report vulnerabilities publicly** by [opening a bug report](https://github.com/blueshift-gg/quasar/issues/new?template=bug.yml). Public disclosure helps everyone and gets bugs fixed faster.
 
-**Email:** [leo@blueshift.gg](mailto:leo@blueshift.gg)
-
-Include:
-- Description of the vulnerability
-- Steps to reproduce
-- Affected crate(s)
-- Suggested fix (if any)
-
-We will acknowledge receipt within 48 hours.
+Once Quasar is audited and in production use, we'll switch to private disclosure with a bug bounty program.
 
 ## Scope
 
