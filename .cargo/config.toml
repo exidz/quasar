@@ -1,2 +1,3 @@
 [build]
+target-dir = "/home/exidz/workspaces/quasar/target"
 rustflags = ["--check-cfg=cfg(target_os, values(\"solana\"))"]
