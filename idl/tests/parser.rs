@@ -1,5 +1,5 @@
 use quasar_idl::{
-    parser::{errors, events, helpers, program, state},
+    parser::{accounts, errors, events, helpers, program, state},
     types::IdlType,
 };
 
@@ -780,6 +780,372 @@ fn ts_codegen_remaining_accounts() {
         code.contains("...(input.remainingAccounts ?? [])"),
         "Kit instruction builder should spread remaining accounts"
     );
+}
+
+#[test]
+fn rust_codegen_ergo_facade() {
+    // Covers the Rust-only account derivation path where the facade must hide
+    // PDA and fixed-address accounts while preserving remaining accounts.
+    use quasar_idl::{
+        codegen::rust::generate_client,
+        parser::{
+            accounts::{RawAccountField, RawAccountsStruct, RawPda, RawSeed},
+            ParsedProgram,
+        },
+    };
+
+    let parsed = ParsedProgram {
+        program_id: "ABcDeFgH111111111111111111111111111111111111".to_string(),
+        program_name: "test_program".to_string(),
+        crate_name: "test-program".to_string(),
+        version: "0.1.0".to_string(),
+        instructions: vec![program::RawInstruction {
+            name: "make".to_string(),
+            discriminator: vec![0],
+            accounts_type_name: "Make".to_string(),
+            args: vec![("amount".to_string(), syn::parse_str("u64").unwrap())],
+            has_remaining: true,
+        }],
+        accounts_structs: vec![RawAccountsStruct {
+            name: "Make".to_string(),
+            fields: vec![
+                RawAccountField {
+                    name: "payer".to_string(),
+                    writable: true,
+                    signer: true,
+                    pda: None,
+                    address: None,
+                },
+                RawAccountField {
+                    name: "vault".to_string(),
+                    writable: true,
+                    signer: false,
+                    pda: Some(RawPda {
+                        seeds: vec![
+                            RawSeed::ByteString(b"vault".to_vec()),
+                            RawSeed::AccountRef("payer".to_string()),
+                        ],
+                    }),
+                    address: None,
+                },
+                RawAccountField {
+                    name: "system_program".to_string(),
+                    writable: false,
+                    signer: false,
+                    pda: None,
+                    address: Some("11111111111111111111111111111111".to_string()),
+                },
+            ],
+        }],
+        state_accounts: vec![],
+        events: vec![],
+        errors: vec![],
+        data_structs: vec![],
+    };
+
+    let code = generate_client(&parsed);
+
+    assert!(code.contains("pub mod accounts"));
+    assert!(code.contains("pub struct Make {"));
+    assert!(code.contains("pub payer: Address"));
+    assert!(code.contains("pub remaining_accounts: Vec<AccountMeta>"));
+    assert!(code.contains("pub mod args"));
+    assert!(code.contains("pub amount: u64"));
+    assert!(code.contains("pub mod instructions"));
+    assert!(code.contains(
+        "pub fn make(accounts: crate::accounts::Make, args: crate::args::Make) -> Instruction"
+    ));
+    assert!(code.contains("let vault = Address::find_program_address(&[&[118u8, 97u8, 117u8, 108u8, 116u8], accounts.payer.as_ref()], &ID).0;"));
+    assert!(code.contains(
+        "let system_program = solana_address::address!(\"11111111111111111111111111111111\");"
+    ));
+    assert!(code.contains("remaining_accounts: accounts.remaining_accounts"));
+}
+
+#[test]
+fn ts_codegen_ergo_facade() {
+    // Verifies the web3.js facade emits the split namespaces and forwards into
+    // the existing instruction builder.
+    use quasar_idl::{
+        codegen::typescript::generate_ts_client,
+        parser::{build_idl, ParsedProgram},
+    };
+
+    let parsed = ParsedProgram {
+        program_id: "ABcDeFgH111111111111111111111111111111111111".to_string(),
+        program_name: "test_program".to_string(),
+        crate_name: "test-program".to_string(),
+        version: "0.1.0".to_string(),
+        instructions: vec![program::RawInstruction {
+            name: "make".to_string(),
+            discriminator: vec![0],
+            accounts_type_name: "Make".to_string(),
+            args: vec![("amount".to_string(), syn::parse_str("u64").unwrap())],
+            has_remaining: true,
+        }],
+        accounts_structs: vec![accounts::RawAccountsStruct {
+            name: "Make".to_string(),
+            fields: vec![accounts::RawAccountField {
+                name: "payer".to_string(),
+                writable: true,
+                signer: true,
+                pda: None,
+                address: None,
+            }],
+        }],
+        state_accounts: vec![],
+        events: vec![],
+        errors: vec![],
+        data_structs: vec![],
+    };
+
+    let idl = build_idl(parsed);
+    let code = generate_ts_client(&idl);
+
+    assert!(code.contains("export namespace accounts"));
+    assert!(code.contains("export interface Make {"));
+    assert!(code.contains("payer: Address;"));
+    assert!(code.contains(
+        "remainingAccounts?: Array<{ pubkey: Address; isSigner: boolean; isWritable: boolean }>;"
+    ));
+    assert!(code.contains("export namespace args"));
+    assert!(code.contains("amount: bigint;"));
+    assert!(code.contains("export namespace instructions"));
+    assert!(code.contains(
+        "export function make(accounts: accounts.Make, args: args.Make): TransactionInstruction {"
+    ));
+    assert!(code.contains("return client.createMakeInstruction({ ...accounts, ...args });"));
+}
+
+#[test]
+fn python_codegen_ergo_facade() {
+    // Ensures Python gets typed accounts/args dataclasses without replacing
+    // the legacy mixed input builder.
+    use quasar_idl::{
+        codegen::python::generate_python_client,
+        parser::{build_idl, ParsedProgram},
+    };
+
+    let parsed = ParsedProgram {
+        program_id: "ABcDeFgH111111111111111111111111111111111111".to_string(),
+        program_name: "test_program".to_string(),
+        crate_name: "test-program".to_string(),
+        version: "0.1.0".to_string(),
+        instructions: vec![program::RawInstruction {
+            name: "make".to_string(),
+            discriminator: vec![0],
+            accounts_type_name: "Make".to_string(),
+            args: vec![("amount".to_string(), syn::parse_str("u64").unwrap())],
+            has_remaining: true,
+        }],
+        accounts_structs: vec![accounts::RawAccountsStruct {
+            name: "Make".to_string(),
+            fields: vec![accounts::RawAccountField {
+                name: "payer".to_string(),
+                writable: true,
+                signer: true,
+                pda: None,
+                address: None,
+            }],
+        }],
+        state_accounts: vec![],
+        events: vec![],
+        errors: vec![],
+        data_structs: vec![],
+    };
+
+    let idl = build_idl(parsed);
+    let code = generate_python_client(&idl);
+
+    assert!(code.contains("class MakeAccounts:"));
+    assert!(code.contains("payer: Pubkey"));
+    assert!(code.contains("remaining_accounts: Optional[list[AccountMeta]] = None"));
+    assert!(code.contains("class MakeArgs:"));
+    assert!(code.contains("amount: int"));
+    assert!(code
+        .contains("def make_instruction(accounts: MakeAccounts, args: MakeArgs) -> Instruction:"));
+    assert!(code.contains("input = MakeInput("));
+    assert!(code.contains("payer=accounts.payer"));
+    assert!(code.contains("amount=args.amount"));
+    assert!(code.contains("remaining_accounts=accounts.remaining_accounts"));
+}
+
+#[test]
+fn go_codegen_ergo_facade() {
+    // Confirms the Go wrapper constructs the old input struct instead of
+    // introducing a second encoding path.
+    use quasar_idl::{
+        codegen::golang::generate_go_client,
+        parser::{build_idl, ParsedProgram},
+    };
+
+    let parsed = ParsedProgram {
+        program_id: "ABcDeFgH111111111111111111111111111111111111".to_string(),
+        program_name: "test_program".to_string(),
+        crate_name: "test-program".to_string(),
+        version: "0.1.0".to_string(),
+        instructions: vec![program::RawInstruction {
+            name: "make".to_string(),
+            discriminator: vec![0],
+            accounts_type_name: "Make".to_string(),
+            args: vec![("amount".to_string(), syn::parse_str("u64").unwrap())],
+            has_remaining: true,
+        }],
+        accounts_structs: vec![accounts::RawAccountsStruct {
+            name: "Make".to_string(),
+            fields: vec![accounts::RawAccountField {
+                name: "payer".to_string(),
+                writable: true,
+                signer: true,
+                pda: None,
+                address: None,
+            }],
+        }],
+        state_accounts: vec![],
+        events: vec![],
+        errors: vec![],
+        data_structs: vec![],
+    };
+
+    let idl = build_idl(parsed);
+    let code = generate_go_client(&idl);
+
+    assert!(code.contains("type MakeAccounts struct {"));
+    assert!(code.contains("Payer solana.PublicKey"));
+    assert!(code.contains("RemainingAccounts []*solana.AccountMeta"));
+    assert!(code.contains("type MakeArgs struct {"));
+    assert!(code.contains("Amount uint64"));
+    assert!(code.contains(
+        "func MakeInstruction(accounts MakeAccounts, args MakeArgs) *solana.GenericInstruction {"
+    ));
+    assert!(code.contains("input := &MakeInput{"));
+    assert!(code.contains("Payer: accounts.Payer"));
+    assert!(code.contains("Amount: args.Amount"));
+    assert!(code.contains("RemainingAccounts: accounts.RemainingAccounts"));
+    assert!(code.contains("return NewMakeInstruction(input)"));
+}
+
+#[test]
+fn ts_kit_codegen_ergo_facade_with_pda_is_async() {
+    // PDA derivation makes the kit builder async; the facade must preserve that
+    // signature instead of silently returning a sync wrapper.
+    use quasar_idl::{
+        codegen::typescript::generate_ts_client_kit,
+        parser::{build_idl, ParsedProgram},
+    };
+
+    let parsed = ParsedProgram {
+        program_id: "ABcDeFgH111111111111111111111111111111111111".to_string(),
+        program_name: "test_program".to_string(),
+        crate_name: "test-program".to_string(),
+        version: "0.1.0".to_string(),
+        instructions: vec![program::RawInstruction {
+            name: "make".to_string(),
+            discriminator: vec![0],
+            accounts_type_name: "Make".to_string(),
+            args: vec![],
+            has_remaining: false,
+        }],
+        accounts_structs: vec![accounts::RawAccountsStruct {
+            name: "Make".to_string(),
+            fields: vec![
+                accounts::RawAccountField {
+                    name: "payer".to_string(),
+                    writable: true,
+                    signer: true,
+                    pda: None,
+                    address: None,
+                },
+                accounts::RawAccountField {
+                    name: "vault".to_string(),
+                    writable: true,
+                    signer: false,
+                    pda: Some(accounts::RawPda {
+                        seeds: vec![
+                            accounts::RawSeed::ByteString(b"vault".to_vec()),
+                            accounts::RawSeed::AccountRef("payer".to_string()),
+                        ],
+                    }),
+                    address: None,
+                },
+            ],
+        }],
+        state_accounts: vec![],
+        events: vec![],
+        errors: vec![],
+        data_structs: vec![],
+    };
+
+    let idl = build_idl(parsed);
+    let code = generate_ts_client_kit(&idl);
+
+    assert!(code.contains("export namespace instructions"));
+    assert!(code.contains(
+        "export async function make(accounts: accounts.Make, args: args.Make): Promise<IInstruction> {"
+    ));
+    assert!(code.contains("return client.createMakeInstruction({ ...accounts, ...args });"));
+}
+
+#[test]
+fn facade_codegen_handles_zero_input_instructions() {
+    // Empty instructions still need uniform facade shapes so downstream code
+    // can rely on `accounts`/`args`/`instructions` existing everywhere.
+    use quasar_idl::{
+        codegen::{
+            golang::generate_go_client, python::generate_python_client, rust::generate_client,
+            typescript::generate_ts_client,
+        },
+        parser::{build_idl, ParsedProgram},
+    };
+
+    let parsed = ParsedProgram {
+        program_id: "ABcDeFgH111111111111111111111111111111111111".to_string(),
+        program_name: "test_program".to_string(),
+        crate_name: "test-program".to_string(),
+        version: "0.1.0".to_string(),
+        instructions: vec![program::RawInstruction {
+            name: "ping".to_string(),
+            discriminator: vec![9],
+            accounts_type_name: "Ping".to_string(),
+            args: vec![],
+            has_remaining: false,
+        }],
+        accounts_structs: vec![accounts::RawAccountsStruct {
+            name: "Ping".to_string(),
+            fields: vec![],
+        }],
+        state_accounts: vec![],
+        events: vec![],
+        errors: vec![],
+        data_structs: vec![],
+    };
+
+    let rust_code = generate_client(&parsed);
+    assert!(rust_code.contains("pub struct Ping;"));
+    assert!(rust_code.contains(
+        "pub fn ping(accounts: crate::accounts::Ping, args: crate::args::Ping) -> Instruction"
+    ));
+
+    let idl = build_idl(parsed);
+
+    let ts_code = generate_ts_client(&idl);
+    assert!(ts_code.contains("export interface Ping {\n  }\n"));
+    assert!(ts_code.contains(
+        "export function ping(accounts: accounts.Ping, args: args.Ping): TransactionInstruction {"
+    ));
+
+    let py_code = generate_python_client(&idl);
+    assert!(py_code.contains("class PingAccounts:\n    pass"));
+    assert!(py_code.contains("class PingArgs:\n    pass"));
+    assert!(py_code
+        .contains("def ping_instruction(accounts: PingAccounts, args: PingArgs) -> Instruction:"));
+
+    let go_code = generate_go_client(&idl);
+    assert!(go_code.contains("type PingAccounts struct {\n}\n"));
+    assert!(go_code.contains("type PingArgs struct {\n}\n"));
+    assert!(go_code.contains(
+        "func PingInstruction(accounts PingAccounts, args PingArgs) *solana.GenericInstruction {"
+    ));
 }
 
 // ---------------------------------------------------------------------------

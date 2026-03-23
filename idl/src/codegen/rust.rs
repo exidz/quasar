@@ -99,6 +99,7 @@ pub fn generate_client(parsed: &ParsedProgram) -> String {
 
     // --- Custom data type definitions ---
     for (type_name, fields) in &type_map {
+        writeln!(out, "#[allow(non_snake_case)]").expect("write to String");
         writeln!(out, "pub struct {} {{", type_name).expect("write to String");
         for (field_name, field_ty) in fields {
             writeln!(
@@ -111,6 +112,12 @@ pub fn generate_client(parsed: &ParsedProgram) -> String {
         }
         out.push_str("}\n\n");
     }
+
+    // Additive facade modules provide the ergonomic split API without changing
+    // the legacy instruction structs below.
+    emit_accounts_module(&mut out, parsed);
+    emit_args_module(&mut out, parsed);
+    emit_instructions_module(&mut out, parsed);
 
     for ix in &parsed.instructions {
         let accounts_struct = parsed
@@ -127,6 +134,7 @@ pub fn generate_client(parsed: &ParsedProgram) -> String {
             .collect();
 
         // --- Struct definition ---
+        writeln!(out, "#[allow(non_snake_case)]").expect("write to String");
         writeln!(out, "pub struct {}Instruction {{", struct_name).expect("write to String");
 
         // Account fields (all Address)
@@ -225,6 +233,7 @@ pub fn generate_client(parsed: &ParsedProgram) -> String {
 
         // Event struct definitions
         for type_def in &event_types {
+            writeln!(out, "#[allow(non_snake_case)]").expect("write to String");
             writeln!(out, "pub struct {} {{", type_def.name).expect("write to String");
             for field in &type_def.ty.fields {
                 writeln!(
@@ -251,6 +260,7 @@ pub fn generate_client(parsed: &ParsedProgram) -> String {
         out.push_str("}\n\n");
 
         // decode_event function
+        out.push_str("#[allow(non_snake_case, unused_assignments)]\n");
         out.push_str("pub fn decode_event(data: &[u8]) -> Option<ProgramEvent> {\n");
         for (i, ev) in parsed.events.iter().enumerate() {
             let const_name = pascal_to_screaming_snake(&ev.name);
@@ -295,6 +305,166 @@ pub fn generate_client(parsed: &ParsedProgram) -> String {
     out
 }
 
+fn emit_accounts_module(out: &mut String, parsed: &ParsedProgram) {
+    // Only user-supplied accounts belong in the facade account containers.
+    out.push_str("pub mod accounts {\n");
+    out.push('\n');
+
+    for ix in &parsed.instructions {
+        let struct_name = snake_to_pascal(&ix.name);
+        let accounts_struct = parsed
+            .accounts_structs
+            .iter()
+            .find(|s| s.name == ix.accounts_type_name);
+        let user_account_count = accounts_struct
+            .map(|accs| {
+                accs.fields
+                    .iter()
+                    .filter(|field| field.pda.is_none() && field.address.is_none())
+                    .count()
+            })
+            .unwrap_or(0);
+
+        if user_account_count == 0 && !ix.has_remaining {
+            writeln!(out, "    pub struct {};", struct_name).expect("write to String");
+            out.push('\n');
+            continue;
+        }
+
+        writeln!(out, "    pub struct {} {{", struct_name).expect("write to String");
+
+        if let Some(accs) = accounts_struct {
+            for field in accs
+                .fields
+                .iter()
+                .filter(|field| field.pda.is_none() && field.address.is_none())
+            {
+                writeln!(out, "        pub {}: solana_address::Address,", field.name)
+                    .expect("write to String");
+            }
+        }
+        if ix.has_remaining {
+            out.push_str(
+                "        pub remaining_accounts: std::vec::Vec<solana_instruction::AccountMeta>,\n",
+            );
+        }
+
+        out.push_str("    }\n\n");
+    }
+
+    out.push_str("}\n\n");
+}
+
+fn emit_args_module(out: &mut String, parsed: &ParsedProgram) {
+    // Args are emitted separately so tests and callers can stay focused on
+    // intent instead of byte layout.
+    out.push_str("pub mod args {\n");
+    out.push('\n');
+
+    for ix in &parsed.instructions {
+        let struct_name = snake_to_pascal(&ix.name);
+        let arg_types: Vec<IdlType> = ix
+            .args
+            .iter()
+            .map(|(_, ty)| helpers::map_type_from_syn(ty))
+            .collect();
+
+        if ix.args.is_empty() {
+            writeln!(out, "    pub struct {};", struct_name).expect("write to String");
+            out.push('\n');
+            continue;
+        }
+
+        writeln!(out, "    pub struct {} {{", struct_name).expect("write to String");
+        for (i, (name, _)) in ix.args.iter().enumerate() {
+            writeln!(
+                out,
+                "        pub {}: {},",
+                name,
+                rust_module_field_type(&arg_types[i])
+            )
+            .expect("write to String");
+        }
+        out.push_str("    }\n\n");
+    }
+
+    out.push_str("}\n\n");
+}
+
+fn emit_instructions_module(out: &mut String, parsed: &ParsedProgram) {
+    // The ergonomic builders route into the existing `*Instruction` structs so
+    // codegen stays strictly additive.
+    out.push_str("pub mod instructions {\n");
+    out.push_str("    use super::*;\n\n");
+
+    for ix in &parsed.instructions {
+        let struct_name = snake_to_pascal(&ix.name);
+        let accounts_struct = parsed
+            .accounts_structs
+            .iter()
+            .find(|s| s.name == ix.accounts_type_name);
+        let args_binding = if ix.args.is_empty() { "_args" } else { "args" };
+
+        writeln!(
+            out,
+            "    pub fn {}(accounts: crate::accounts::{}, args: crate::args::{}) -> Instruction {{",
+            ix.name, struct_name, struct_name
+        )
+        .expect("write to String");
+        if ix.args.is_empty() {
+            out.push_str("        let _ = args;\n");
+        }
+
+        let user_account_names: std::collections::HashSet<&str> = accounts_struct
+            .map(|accs| {
+                accs.fields
+                    .iter()
+                    .filter(|field| field.pda.is_none() && field.address.is_none())
+                    .map(|field| field.name.as_str())
+                    .collect()
+            })
+            .unwrap_or_default();
+
+        if let Some(accs) = accounts_struct {
+            for field in accs
+                .fields
+                .iter()
+                .filter(|field| field.pda.is_some() || field.address.is_some())
+            {
+                let value = rust_account_value_expr(field, &user_account_names);
+                writeln!(out, "        let {} = {};", field.name, value).expect("write to String");
+            }
+
+            writeln!(out, "        {}Instruction {{", struct_name).expect("write to String");
+            for field in &accs.fields {
+                let value = if user_account_names.contains(field.name.as_str()) {
+                    format!("accounts.{}", field.name)
+                } else {
+                    field.name.clone()
+                };
+                writeln!(out, "            {}: {},", field.name, value).expect("write to String");
+            }
+        } else {
+            writeln!(out, "        {}Instruction {{", struct_name).expect("write to String");
+        }
+
+        for (name, _) in &ix.args {
+            writeln!(out, "            {}: {}.{},", name, args_binding, name)
+                .expect("write to String");
+        }
+
+        if ix.has_remaining {
+            out.push_str("            remaining_accounts: accounts.remaining_accounts,\n");
+        }
+
+        out.push_str("        }\n");
+        out.push_str("        .into()\n");
+        out.push_str("    }\n\n");
+    }
+
+    out.push_str("}\n\n");
+}
+
 fn account_meta_expr(field: &RawAccountField) -> String {
     let signer = field.signer;
     if field.writable {
@@ -317,6 +487,21 @@ fn rust_field_type(ty: &IdlType) -> String {
         }
         IdlType::Defined { defined } => defined.clone(),
         IdlType::Tail { .. } => "Vec<u8>".to_string(),
+    }
+}
+
+fn rust_module_field_type(ty: &IdlType) -> String {
+    match ty {
+        IdlType::Primitive(p) => match p.as_str() {
+            "publicKey" => "solana_address::Address".to_string(),
+            other => other.to_string(),
+        },
+        IdlType::DynString { .. } => "std::vec::Vec<u8>".to_string(),
+        IdlType::DynVec { vec } => {
+            format!("std::vec::Vec<{}>", rust_module_field_type(&vec.items))
+        }
+        IdlType::Defined { defined } => format!("super::{}", defined),
+        IdlType::Tail { .. } => "std::vec::Vec<u8>".to_string(),
     }
 }
 
@@ -498,4 +683,50 @@ fn snake_to_pascal(s: &str) -> String {
             }
         })
         .collect()
+}
+
+fn rust_account_value_expr(
+    field: &RawAccountField,
+    user_account_names: &std::collections::HashSet<&str>,
+) -> String {
+    if let Some(address) = &field.address {
+        return format!("solana_address::address!(\"{}\")", address);
+    }
+
+    if let Some(pda) = &field.pda {
+        let seeds: Vec<String> = pda
+            .seeds
+            .iter()
+            .map(|seed| rust_seed_expr(seed, user_account_names))
+            .collect();
+        return format!(
+            "Address::find_program_address(&[{}], &ID).0",
+            seeds.join(", ")
+        );
+    }
+
+    format!("accounts.{}", field.name)
+}
+
+fn rust_seed_expr(
+    seed: &crate::parser::accounts::RawSeed,
+    user_account_names: &std::collections::HashSet<&str>,
+) -> String {
+    match seed {
+        crate::parser::accounts::RawSeed::ByteString(bytes) => {
+            let values = bytes
+                .iter()
+                .map(|b| format!("{b}u8"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("&[{values}]")
+        }
+        crate::parser::accounts::RawSeed::AccountRef(path) => {
+            if user_account_names.contains(path.as_str()) {
+                format!("accounts.{path}.as_ref()")
+            } else {
+                format!("{path}.as_ref()")
+            }
+        }
+    }
 }

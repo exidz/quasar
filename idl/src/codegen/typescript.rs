@@ -490,6 +490,10 @@ fn generate_ts(idl: &Idl, target: TsTarget) -> String {
 
     out.push_str("}\n\n");
 
+    emit_accounts_namespace(&mut out, idl, target);
+    emit_args_namespace(&mut out, idl);
+    emit_instructions_namespace(&mut out, idl, target);
+
     // === Errors ===
     if !idl.errors.is_empty() {
         out.push_str("/* Errors */\n");
@@ -516,6 +520,106 @@ fn generate_ts(idl: &Idl, target: TsTarget) -> String {
     }
 
     out
+}
+
+fn emit_accounts_namespace(out: &mut String, idl: &Idl, target: TsTarget) {
+    // Keep facade accounts limited to caller-provided values; fixed addresses
+    // and PDAs remain hidden behind the existing builders.
+    out.push_str("export namespace accounts {\n");
+
+    for ix in &idl.instructions {
+        let pascal = snake_to_pascal(&ix.name);
+        writeln!(out, "  export interface {} {{", pascal).expect("write to String");
+
+        for acc in ix
+            .accounts
+            .iter()
+            .filter(|acc| acc.pda.is_none() && acc.address.is_none())
+        {
+            writeln!(out, "    {}: Address;", acc.name).expect("write to String");
+        }
+
+        if ix.has_remaining {
+            match target {
+                TsTarget::Kit => {
+                    out.push_str(
+                        "    remainingAccounts?: Array<{ address: Address; role: AccountRole }>;\n",
+                    );
+                }
+                TsTarget::Web3js => {
+                    out.push_str(
+                        "    remainingAccounts?: Array<{ pubkey: Address; isSigner: boolean; isWritable: boolean }>;\n",
+                    );
+                }
+            }
+        }
+
+        out.push_str("  }\n\n");
+    }
+
+    out.push_str("}\n\n");
+}
+
+fn emit_args_namespace(out: &mut String, idl: &Idl) {
+    // Args stay separate so generated examples can pass typed values directly.
+    out.push_str("export namespace args {\n");
+
+    for ix in &idl.instructions {
+        let pascal = snake_to_pascal(&ix.name);
+        writeln!(out, "  export interface {} {{", pascal).expect("write to String");
+        for arg in &ix.args {
+            writeln!(out, "    {}: {};", arg.name, ts_type(&arg.ty)).expect("write to String");
+        }
+        out.push_str("  }\n\n");
+    }
+
+    out.push_str("}\n\n");
+}
+
+fn emit_instructions_namespace(out: &mut String, idl: &Idl, target: TsTarget) {
+    // Namespace functions delegate to the client methods to preserve the old
+    // API as the single encoding implementation.
+    out.push_str("export namespace instructions {\n");
+    let class_name = format!("{}Client", snake_to_pascal(&idl.metadata.name));
+    writeln!(out, "  const client = new {}();\n", class_name).expect("write to String");
+
+    for ix in &idl.instructions {
+        let pascal = snake_to_pascal(&ix.name);
+        let ix_has_pdas = ix.accounts.iter().any(|acc| acc.pda.is_some());
+        let return_type = match target {
+            TsTarget::Web3js => "TransactionInstruction",
+            TsTarget::Kit if ix_has_pdas => "Promise<IInstruction>",
+            TsTarget::Kit => "IInstruction",
+        };
+        let async_kw = if target == TsTarget::Kit && ix_has_pdas {
+            "async "
+        } else {
+            ""
+        };
+
+        writeln!(
+            out,
+            "  export {async_kw}function {}(accounts: accounts.{}, args: args.{}): {} {{",
+            ix.name, pascal, pascal, return_type
+        )
+        .expect("write to String");
+
+        if ix.accounts.is_empty() && ix.args.is_empty() && !ix.has_remaining {
+            writeln!(out, "    return client.create{}Instruction();", pascal)
+                .expect("write to String");
+        } else {
+            writeln!(
+                out,
+                "    return client.create{}Instruction({{ ...accounts, ...args }});",
+                pascal
+            )
+            .expect("write to String");
+        }
+
+        out.push_str("  }\n\n");
+    }
+
+    out.push_str("}\n\n");
 }
 
 // ---------------------------------------------------------------------------

@@ -25,6 +25,7 @@ pub fn generate_python_client(idl: &Idl) -> String {
 
     let has_events = !idl.events.is_empty();
     let has_args = idl.instructions.iter().any(|ix| !ix.args.is_empty());
+    let has_remaining = idl.instructions.iter().any(|ix| ix.has_remaining);
     let has_dynamic = idl.instructions.iter().any(|ix| {
         ix.args.iter().any(|a| {
             matches!(
@@ -41,7 +42,7 @@ pub fn generate_python_client(idl: &Idl) -> String {
         })
     });
 
-    if has_events || has_args || has_dynamic {
+    if has_events || has_args || has_remaining || has_dynamic {
         out.push_str("from typing import Optional\n");
     }
 
@@ -157,6 +158,44 @@ pub fn generate_python_client(idl: &Idl) -> String {
         let class_name = to_pascal(&ix.name);
         let fn_name = to_snake(&ix.name);
 
+        // The facade splits caller-supplied accounts from encoded args while
+        // reusing the existing mixed input builder below.
+        writeln!(out, "\n@dataclass").unwrap();
+        writeln!(out, "class {}Accounts:", class_name).unwrap();
+
+        let mut has_account_fields = false;
+        for acc in &ix.accounts {
+            if acc.address.is_some() || acc.pda.is_some() {
+                continue;
+            }
+            writeln!(out, "    {}: Pubkey", to_snake(&acc.name)).unwrap();
+            has_account_fields = true;
+        }
+
+        if ix.has_remaining {
+            out.push_str("    remaining_accounts: Optional[list[AccountMeta]] = None\n");
+            has_account_fields = true;
+        }
+
+        if !has_account_fields {
+            out.push_str("    pass\n");
+        }
+        out.push('\n');
+
+        // Empty args still get a dataclass so the generated shape stays
+        // uniform across instructions.
+        writeln!(out, "@dataclass").unwrap();
+        writeln!(out, "class {}Args:", class_name).unwrap();
+
+        if ix.args.is_empty() {
+            out.push_str("    pass\n");
+        } else {
+            for arg in &ix.args {
+                writeln!(out, "    {}: {}", to_snake(&arg.name), python_type(&arg.ty)).unwrap();
+            }
+        }
+        out.push('\n');
+
         // Input dataclass
         writeln!(out, "\n@dataclass").unwrap();
         writeln!(out, "class {}Input:", class_name).unwrap();
@@ -259,6 +298,32 @@ pub fn generate_python_client(idl: &Idl) -> String {
         }
 
         out.push_str("    return Instruction(PROGRAM_ID, data, accounts)\n\n");
+
+        // Route the ergonomic wrapper through the legacy entrypoint so the
+        // serialization path remains unchanged.
+        writeln!(
+            out,
+            "def {}_instruction(accounts: {}Accounts, args: {}Args) -> Instruction:",
+            fn_name, class_name, class_name
+        )
+        .unwrap();
+        writeln!(out, "    input = {}Input(", class_name).unwrap();
+        for acc in &ix.accounts {
+            if acc.address.is_some() || acc.pda.is_some() {
+                continue;
+            }
+            let name = to_snake(&acc.name);
+            writeln!(out, "        {}=accounts.{},", name, name).unwrap();
+        }
+        for arg in &ix.args {
+            let name = to_snake(&arg.name);
+            writeln!(out, "        {}=args.{},", name, name).unwrap();
+        }
+        if ix.has_remaining {
+            out.push_str("        remaining_accounts=accounts.remaining_accounts,\n");
+        }
+        out.push_str("    )\n");
+        writeln!(out, "    return create_{}_instruction(input)\n", fn_name).unwrap();
     }
 
     // Event decoder
@@ -320,6 +385,21 @@ pub fn generate_python_client(idl: &Idl) -> String {
         )
         .unwrap();
         writeln!(out, "        return create_{}_instruction(input)", fn_name).unwrap();
+        out.push('\n');
+
+        writeln!(out, "    @staticmethod").unwrap();
+        writeln!(
+            out,
+            "    def {}_instruction(accounts: {}Accounts, args: {}Args) -> Instruction:",
+            fn_name, class_name, class_name
+        )
+        .unwrap();
+        writeln!(
+            out,
+            "        return {}_instruction(accounts, args)",
+            fn_name
+        )
+        .unwrap();
         out.push('\n');
     }
 

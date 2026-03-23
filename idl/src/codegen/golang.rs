@@ -145,6 +145,27 @@ pub fn generate_go_client(idl: &Idl) -> String {
     for ix in &idl.instructions {
         let pascal_name = to_pascal(&ix.name);
 
+        // The facade keeps user-provided accounts separate from encoded args.
+        writeln!(out, "type {}Accounts struct {{", pascal_name).unwrap();
+        for acc in &ix.accounts {
+            if acc.address.is_some() || acc.pda.is_some() {
+                continue;
+            }
+            writeln!(out, "\t{} solana.PublicKey", to_pascal(&acc.name)).unwrap();
+        }
+        if ix.has_remaining {
+            out.push_str("\tRemainingAccounts []*solana.AccountMeta\n");
+        }
+        out.push_str("}\n\n");
+
+        // Emit args independently so the generated API mirrors the other
+        // language targets.
+        writeln!(out, "type {}Args struct {{", pascal_name).unwrap();
+        for arg in &ix.args {
+            writeln!(out, "\t{} {}", to_pascal(&arg.name), go_type(&arg.ty),).unwrap();
+        }
+        out.push_str("}\n\n");
+
         // Input struct
         writeln!(out, "type {}Input struct {{", pascal_name).unwrap();
         for acc in &ix.accounts {
@@ -159,6 +180,33 @@ pub fn generate_go_client(idl: &Idl) -> String {
         if ix.has_remaining {
             out.push_str("\tRemainingAccounts []*solana.AccountMeta\n");
         }
+        out.push_str("}\n\n");
+
+        // Delegate to the legacy constructor so encoding behavior stays in one
+        // place.
+        writeln!(
+            out,
+            "func {}Instruction(accounts {}Accounts, args {}Args) *solana.GenericInstruction {{",
+            pascal_name, pascal_name, pascal_name
+        )
+        .unwrap();
+        writeln!(out, "\tinput := &{}Input{{", pascal_name).unwrap();
+        for acc in &ix.accounts {
+            if acc.address.is_some() || acc.pda.is_some() {
+                continue;
+            }
+            let field = to_pascal(&acc.name);
+            writeln!(out, "\t\t{}: accounts.{},", field, field).unwrap();
+        }
+        for arg in &ix.args {
+            let field = to_pascal(&arg.name);
+            writeln!(out, "\t\t{}: args.{},", field, field).unwrap();
+        }
+        if ix.has_remaining {
+            out.push_str("\t\tRemainingAccounts: accounts.RemainingAccounts,\n");
+        }
+        out.push_str("\t}\n");
+        writeln!(out, "\treturn New{}Instruction(input)", pascal_name).unwrap();
         out.push_str("}\n\n");
 
         // Builder function
